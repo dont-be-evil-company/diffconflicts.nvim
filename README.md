@@ -211,6 +211,7 @@ merge-tool-edits-conflict-markers = true
 
 diffconflicts.nvim uses Neovim's built-in diff mode (`:diffthis`) and
 doesn't define its own highlight groups.
+
 Appearance is controlled entirely by your
 colorscheme via the standard Vim diff highlight groups:
 
@@ -223,6 +224,10 @@ colorscheme via the standard Vim diff highlight groups:
 | `DiffText` | Changed characters within a modified line |
 | `DiffTextAdd` | Added characters within a line (Neovim 0.10+) |
 
+
+<details>
+
+<summary>More about theming</summary>
 
 For best results,
 use a colorscheme that gives each group a distinct tinted
@@ -242,6 +247,8 @@ vim.api.nvim_set_hl(0, "DiffChange", { bg = "#d9ad52", fg = "#f2f4f8" })
 vim.api.nvim_set_hl(0, "DiffDelete", { bg = "#dd3c82", fg = "#ee5396" })
 vim.api.nvim_set_hl(0, "DiffText",   { bg = "#6a9cff", fg = "#f2f4f8", bold = true })
 ```
+
+</details>
 
 ## Usage
 

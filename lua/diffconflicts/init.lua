@@ -92,17 +92,37 @@ local function repo_root_from_path(marker, path)
 end
 
 local function repo_root_for_vcs_and_path(vcs, current_abs_path)
-  if vcs == "jj" then
-    return repo_root_from_path(".jj", current_abs_path)
-  end
-  return repo_root_from_path(".git", current_abs_path)
+  local marker = vcs == "jj" and ".jj" or ".git"
+  -- jj resolve launches the merge tool on temp files under /tmp, so the buffer
+  -- path may be outside the repo. Fall back to cwd (jj's working directory).
+  return repo_root_from_path(marker, current_abs_path) or repo_root_from_path(marker, vim.uv.cwd())
 end
 
 local function is_jj_repo()
+  -- Mergetool hint: jj sets this before invoking :DiffConflicts.
+  local ml = vim.g.jj_diffconflicts_marker_length
+  if ml ~= nil and ml ~= "" then
+    return true
+  end
+
+  -- jj resolve uses temp files under /tmp; also search from cwd.
+  local candidates = {}
   local buf_path = vim.api.nvim_buf_get_name(0)
-  local start = buf_path ~= "" and vim.fn.fnamemodify(buf_path, ":p:h") or vim.uv.cwd()
-  local found = vim.fs.find(".jj", { upward = true, path = start, type = "directory" })
-  return found ~= nil and #found > 0
+  if buf_path ~= "" then
+    table.insert(candidates, vim.fn.fnamemodify(buf_path, ":p:h"))
+  end
+  local cwd = vim.uv.cwd()
+  if cwd and cwd ~= "" then
+    table.insert(candidates, cwd)
+  end
+
+  for _, start in ipairs(candidates) do
+    local found = vim.fs.find(".jj", { upward = true, path = start, type = "directory" })
+    if found ~= nil and #found > 0 then
+      return true
+    end
+  end
+  return false
 end
 
 local function effective_vcs()
@@ -112,14 +132,37 @@ local function effective_vcs()
   return config.vcs
 end
 
+--- Parse `jj resolve --list` lines like:
+---   path/to/file.lua                     2-sided conflict
+---   path/to/file.lua                     2-sided conflict including 1 deletion
+local function parse_jj_resolve_list_line(line)
+  if not line or line == "" then
+    return nil
+  end
+  -- Path, then 2+ spaces, then a conflict description.
+  local path = line:match("^(.-)%s%s+.-conflict")
+  if path and path ~= "" then
+    return path
+  end
+  -- Fallback: first whitespace-separated token.
+  return line:match("^(%S+)")
+end
+
 local function conflicted_files_for_vcs(vcs)
   local current = vim.api.nvim_buf_get_name(0)
   local root = repo_root_for_vcs_and_path(vcs, current) or vim.uv.cwd() or ""
   local root_esc = vim.fn.shellescape(root)
 
   if vcs == "jj" then
-    -- jj prints relative paths
-    return systemlist_trim("jj -R " .. root_esc .. " resolve --list")
+    local raw = systemlist_trim("jj -R " .. root_esc .. " resolve --list")
+    local paths = {}
+    for _, line in ipairs(raw) do
+      local path = parse_jj_resolve_list_line(line)
+      if path then
+        table.insert(paths, path)
+      end
+    end
+    return paths
   end
   -- git/hg: for now, git-style "U" filter is used (hg mergetool use-case is separate)
   return systemlist_trim("git -C " .. root_esc .. " diff --name-only --diff-filter=U")
@@ -138,8 +181,8 @@ local function advance_to_next_conflicted_file_for_vcs(vcs, current_abs_path)
 
   local current_rel = nil
   if current_abs_path and current_abs_path ~= "" then
-    local p = vim.fn.fnamemodify(current_abs_path, ":p")
-    local r = vim.fn.fnamemodify(root, ":p")
+    local p = vim.fn.fnamemodify(current_abs_path, ":p"):gsub("/+$", "")
+    local r = vim.fn.fnamemodify(root, ":p"):gsub("/+$", "")
     if p:sub(1, #r + 1) == r .. "/" then
       current_rel = p:sub(#r + 2)
     end
@@ -154,18 +197,34 @@ local function advance_to_next_conflicted_file_for_vcs(vcs, current_abs_path)
       end
     end
   end
-  next_rel = next_rel or files[1]
+  -- If the just-saved file is no longer listed (resolved), open the first
+  -- remaining conflicted file instead of falling back to files[1] blindly
+  -- (which may still be the file we are leaving when the list is stale).
+  if not next_rel then
+    for _, f in ipairs(files) do
+      if f ~= current_rel then
+        next_rel = f
+        break
+      end
+    end
+  end
+  if not next_rel then
+    return false
+  end
 
   local next_abs = vim.fn.fnamemodify(root .. "/" .. next_rel, ":p")
   if current_abs_path and vim.fn.fnamemodify(current_abs_path, ":p") == next_abs then
     return false
   end
 
-  vim.cmd.edit(vim.fn.fnameescape(next_abs))
+  local function open_next()
+    -- Force reload from disk in case a stale buffer exists.
+    local ok_edit = pcall(vim.cmd.edit, vim.fn.fnameescape(next_abs))
+    if not ok_edit then
+      return
+    end
+    pcall(vim.cmd.checktime)
 
-  -- Re-open the diff view for the new buffer.
-  -- Use the configured command so we don't depend on local function order.
-  vim.schedule(function()
     if config.commands and config.commands.diff_conflicts then
       pcall(function()
         vim.cmd(config.commands.diff_conflicts)
@@ -175,7 +234,11 @@ local function advance_to_next_conflicted_file_for_vcs(vcs, current_abs_path)
         vim.cmd("DiffConflicts")
       end)
     end
-  end)
+  end
+
+  -- Never :edit from inside BufWritePost - the write is still in progress and
+  -- Neovim may ignore/ defer the edit, leaving DiffConflicts on the resolved buffer.
+  vim.schedule(open_next)
 
   return true
 end
@@ -196,21 +259,18 @@ local function jj_get_marker_length(explicit)
 end
 
 local function jj_get_patterns(marker_length)
-  local marker = {
-    top = string.rep("<", marker_length),
-    bottom = string.rep(">", marker_length),
-    diff = string.rep("%", marker_length),
-    diff_cont = string.rep("\\", marker_length),
-    snapshot = string.rep("+", marker_length),
-  }
+  -- Escape Lua pattern magic. Especially important for `+` (quantifier) and `%`
+  -- (escape): unescaped `+++++++...` can hang string.find on long markers.
+  local function lit(ch, n)
+    return string.rep("%" .. ch, n)
+  end
 
   return {
-    top = "^" .. marker.top .. " .+$",
-    bottom = "^" .. marker.bottom .. " .+$",
-    -- double to escape `%` symbols
-    diff = "^" .. marker.diff .. marker.diff .. " .+$",
-    diff_cont = "^" .. marker.diff_cont .. " .+$",
-    snapshot = "^" .. marker.snapshot .. " .+$",
+    top = "^" .. lit("<", marker_length) .. " .+$",
+    bottom = "^" .. lit(">", marker_length) .. " .+$",
+    diff = "^" .. lit("%", marker_length) .. " .+$",
+    diff_cont = "^" .. string.rep("\\", marker_length) .. " .+$",
+    snapshot = "^" .. lit("+", marker_length) .. " .+$",
   }
 end
 
@@ -399,10 +459,17 @@ local function jj_setup_diff_splits(conflicts)
         delete_buf_if_valid(right_buf)
         cleanup_plugin_aux_buffers(left_buf)
 
-        -- If there are more conflicts, reopen diff view; otherwise optionally quit.
+        -- If there are more conflicts in this buffer, reopen diff view; otherwise advance.
         local lines = vim.api.nvim_buf_get_lines(left_buf, 0, -1, false)
+        local still_conflicted = false
         if buffer_looks_like_jj_conflict(lines) then
-          -- Re-run using inferred marker length so we always match the buffer.
+          local len = detect_jj_marker_length_from_buffer(lines)
+          if len then
+            local ok_ex, extracted = pcall(jj_extract_conflicts, jj_get_patterns(len), lines)
+            still_conflicted = ok_ex and not vim.tbl_isempty(extracted)
+          end
+        end
+        if still_conflicted then
           jj_run(false, detect_jj_marker_length_from_buffer(lines), nil)
           return
         end
@@ -463,22 +530,46 @@ local function jj_paths_from_args(fargs)
 end
 
 local function jj_ensure_output_buffer(fargs)
-  local output = (fargs and fargs[1]) or vim.fn.argv()[1]
+  -- Prefer explicit :DiffConflicts args. Do not fall back to argv() when a named
+  -- buffer is already open - argv stays as the original mergetool launch files and
+  -- would clobber the next conflicted file after advance-on-save.
+  local output = fargs and fargs[1]
   if output and output ~= "" then
     local current = vim.api.nvim_buf_get_name(0)
     if current == "" or vim.fn.fnamemodify(current, ":p") ~= vim.fn.fnamemodify(output, ":p") then
       vim.cmd.edit(vim.fn.fnameescape(output))
     end
+    return
+  end
+
+  -- `nvim -c DiffConflicts $output ...` already loads argv[1] before -c runs.
+  local current = vim.api.nvim_buf_get_name(0)
+  if current ~= "" then
+    return
+  end
+  output = vim.fn.argv()[1]
+  if output and output ~= "" then
+    vim.cmd.edit(vim.fn.fnameescape(output))
   end
 end
 
 jj_run = function(show_history, marker_length, fargs)
   jj_ensure_output_buffer(fargs)
 
-  local patterns = jj_get_patterns(jj_get_marker_length(marker_length))
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, true)
-
+  local length = jj_get_marker_length(marker_length)
+  -- Prefer an explicit/mergetool length, but if that finds nothing (or the
+  -- buffer uses elongated markers), infer from the buffer contents.
+  local patterns = jj_get_patterns(length)
   local ok, raw_conflicts = pcall(jj_extract_conflicts, patterns, lines)
+  if (not ok or vim.tbl_isempty(raw_conflicts)) and buffer_looks_like_jj_conflict(lines) then
+    local detected = detect_jj_marker_length_from_buffer(lines)
+    if detected and detected ~= length then
+      length = detected
+      patterns = jj_get_patterns(length)
+      ok, raw_conflicts = pcall(jj_extract_conflicts, patterns, lines)
+    end
+  end
   if not ok then
     vim.notify("diffconflicts.nvim (jj): extract conflicts: " .. raw_conflicts, vim.log.levels.ERROR)
     return
@@ -553,11 +644,11 @@ buffer_looks_like_jj_conflict = function(lines)
   for _, line in ipairs(lines) do
     if not has_top and line:match("^<+%s.+$") then
       has_top = true
-    elseif not has_diff and line:match("^%%+%%+%s.+$") then
-      -- "%%%%%%%" in Lua patterns needs escaping; this matches 2+ '%' chars then space.
+    elseif not has_diff and line:match("^%%+%s.+$") then
+      -- one or more literal '%' then space
       has_diff = true
-    elseif not has_snapshot and line:match("^%+%+%s.+$") then
-      -- "+++++++" (2+ '+' chars then space)
+    elseif not has_snapshot and line:match("^%++%s.+$") then
+      -- one or more literal '+' then space
       has_snapshot = true
     elseif not has_bottom and line:match("^>+%s.+$") then
       has_bottom = true
@@ -1062,6 +1153,17 @@ local function check_then_diff()
     return
   end
 
+  -- jj resolve uses temp paths outside the repo; detect jj-style markers even
+  -- when `.jj` was not found from the buffer path (before the git-style check,
+  -- which only matches exactly 7×`<`).
+  do
+    local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+    if buffer_looks_like_jj_conflict(lines) then
+      jj_run(false, detect_jj_marker_length_from_buffer(lines), nil)
+      return
+    end
+  end
+
   if has_conflicts() then
     vim.cmd("redraw")
     vim.cmd("echohl WarningMsg")
@@ -1081,6 +1183,15 @@ M.show_with_history = function()
   check_then_diff()
 end
 
+--- `vim.fn.getenv()` returns vim.NIL (truthy userdata) when unset.
+local function env_string(name)
+  local v = vim.fn.getenv(name)
+  if type(v) ~= "string" or v == "" then
+    return nil
+  end
+  return v
+end
+
 local function command_diff_conflicts(opts)
   if effective_vcs() == "jj" then
     -- Support jj resolve invocation:
@@ -1095,19 +1206,17 @@ local function command_diff_conflicts(opts)
   do
     local args = (opts and opts.fargs) or {}
     local merged = args[1]
-    if not merged or merged == "" then
-      -- When invoked via: nvim -c DiffConflicts "$MERGED" ...
-      -- the file paths are available via argv(), not fargs.
+    local cur = vim.api.nvim_buf_get_name(0)
+    -- When advancing between conflicted files, keep the buffer we just opened.
+    -- argv()/MERGED still point at the original mergetool launch file.
+    if (not merged or merged == "") and cur == "" then
       local argv = vim.fn.argv() or {}
       merged = argv[1]
     end
-    if not merged or merged == "" then
-      -- Some mergetool configurations don't pass file args to Neovim; fall back
-      -- to standard Git mergetool environment variables.
-      merged = vim.fn.getenv("MERGED")
+    if (not merged or merged == "") and cur == "" then
+      merged = env_string("MERGED")
     end
     if merged and merged ~= "" then
-      local cur = vim.api.nvim_buf_get_name(0)
       local merged_abs = vim.fn.fnamemodify(merged, ":p")
       local cur_abs = cur ~= "" and vim.fn.fnamemodify(cur, ":p") or ""
       if cur_abs == "" or cur_abs ~= merged_abs then
@@ -1134,14 +1243,12 @@ local function seed_history_bufs_from_args(opts)
     else
       -- Some mergetool configurations don't pass file args to Neovim; fall back
       -- to standard Git mergetool environment variables.
-      merged_path = vim.fn.getenv("MERGED")
-      base_path = vim.fn.getenv("BASE")
-      local_path = vim.fn.getenv("LOCAL")
-      remote_path = vim.fn.getenv("REMOTE")
+      merged_path = env_string("MERGED")
+      base_path = env_string("BASE")
+      local_path = env_string("LOCAL")
+      remote_path = env_string("REMOTE")
 
-      if
-        not (base_path and base_path ~= "" and local_path and local_path ~= "" and remote_path and remote_path ~= "")
-      then
+      if not (base_path and local_path and remote_path) then
         return false
       end
     end
