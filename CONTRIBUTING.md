@@ -46,7 +46,7 @@ here are a few things we expect from you (and that you should expect from others
 ## How to contribute
 
 If you'd like to contribute,
-start by searching through the [pull requests](https://github.com/mistweaverco/diffconflicts.nvim/pulls) to
+start by searching through the [pull requests](https://github.com/dont-be-evil-company/diffconflicts.nvim/pulls) to
 see whether someone else has raised a similar idea or question.
 
 If you don't see your idea listed, and you think it fits into the goals of this guide, open a pull request.
@@ -76,9 +76,9 @@ so you don't need to worry about them.
 
 Discussions about the diffconflict.snvim take place on:
 
-- This repository's [Issues](https://github.com/mistweaverco/diffconflicts.nvim/issues) and
-  [Pull Requests](https://github.com/mistweaverco/diffconflicts.nvim/pulls) sections
-- The [mistwieaverco discord server](https://mistweaverco.com/discord)
+- This repository's [Issues](https://github.com/dont-be-evil-company/diffconflicts.nvim/issues) and
+  [Pull Requests](https://github.com/dont-be-evil-company/diffconflicts.nvim/pulls) sections
+- The [mistwieaverco discord server](https://the-dont-be-evil-company.com/discord)
 
 Anybody is welcome to join these conversations.
 

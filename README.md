@@ -4,11 +4,11 @@
 
 # diffconflicts.nvim
 
-[![Made with love](assets/badge-made-with-love.svg)](https://github.com/mistweaverco/diffconflicts.nvim/graphs/contributors)
-[![GitHub release (latest by date)](https://img.shields.io/github/v/release/mistweaverco/diffconflicts.nvim?style=for-the-badge)](https://github.com/mistweaverco/diffconflicts.nvim/releases/latest)
-[![License](https://img.shields.io/github/license/mistweaverco/diffconflicts.nvim?style=for-the-badge)](./LICENSE)
-[![GitHub issues](https://img.shields.io/github/issues/mistweaverco/diffconflicts.nvim?style=for-the-badge)](https//:github.com/mistweaverco/diffconflicts.nvim/issues)
-[![Discord](assets/badge-discord.svg)](https://mistweaverco.com/discord)
+[![Made with love](assets/badge-made-with-love.svg)](https://github.com/dont-be-evil-company/diffconflicts.nvim/graphs/contributors)
+[![GitHub release (latest by date)](https://img.shields.io/github/v/release/dont-be-evil-company/diffconflicts.nvim?style=for-the-badge)](https://github.com/dont-be-evil-company/diffconflicts.nvim/releases/latest)
+[![License](https://img.shields.io/github/license/dont-be-evil-company/diffconflicts.nvim?style=for-the-badge)](./LICENSE)
+[![GitHub issues](https://img.shields.io/github/issues/dont-be-evil-company/diffconflicts.nvim?style=for-the-badge)](https//:github.com/dont-be-evil-company/diffconflicts.nvim/issues)
+[![Discord](assets/badge-discord.svg)](https://the-dont-be-evil-company.com/discord)
 
 [Requirements](#requirements) • [Installation](#installation) • [Usage](#usage)
 
@@ -86,7 +86,7 @@ For example, with [Lazy](https://github.com/folke/lazy.nvim):
 
 ```lua
 {
-  "mistweaverco/diffconflicts.nvim",
+  "dont-be-evil-company/diffconflicts.nvim",
   opts = {
     -- Optional configuration
     commands = {
@@ -236,7 +236,7 @@ background.
 So line-level changes (add/change/delete) are easy to scan, with
 character-level changes (`DiffText`) using a contrasting hue.
 
-[vhs-era-theme.nvim](https://github.com/mistweaverco/vhs-era-theme.nvim) defines
+[vhs-era-theme.nvim](https://github.com/dont-be-evil-company/vhs-era-theme.nvim) defines
 these groups with vivid tinted backgrounds out of the box.
 
 To override diff colors manually, add this to your config:
